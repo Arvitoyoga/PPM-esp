@@ -3,6 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "portmacro.h"
 #include "driver/gptimer.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
@@ -12,14 +13,14 @@
 
 
 
-#define DEBUG 1
+#define DEBUG 0 //JANGAN DI ENABLE
 
 #define RESOLUTION 1 * 1000 * 1000
 #define RMT_PIN 5
 #define TAG "RMT"
 #define FRAME_DURATION_US 25000
-#define CHANNEL_NUM 8
-#define PPM_PULSE_WIDTH 100
+#define CHANNEL_NUM 10 // SEBELUMNYA 8
+#define PPM_PULSE_WIDTH 200 //TAMBAHI JIKA TIDAK DETEK ATAU TIDAK STABIL (100-300)
 
 #define BUF_SIZE (1024)
 #define UART_RX_PIN 17 
@@ -33,18 +34,28 @@
 #define PAYLOAD_STEP 100
 
 
+enum data_map{ //map data ke command
+    ERROR_CMD = 1,
+    PAYLOAD_RED_CMD =  2,
+    PAYLOAD_BLUE_CMD = 3,
+    CAMERA_CMD = 4,
+    SWITCH_DRONE_CMD = 5,
+};
 
-
-enum channel{
-    ROLL = 0,
+enum channel_map{ //map channel ke command
+        ROLL = 0,
     PITCH,
     YAW,
     THROTTLE,
     ARM,
-    CAM, 
-    DRONE, 
-    PAYLOAD
+    CAM_CH = 5,
+    DRONE_CH = 6,
+    PAYLOAD_RED_CH = 7,
+    PAYLOAD_BLUE_CH = 8,
+    // ERR_CH = 10
 };
+
+
 
 uint16_t channel_val[CHANNEL_NUM] = {0};
 
@@ -105,35 +116,55 @@ void execute_command(uint8_t cmd) {
     ESP_LOGI(TAG, "Executing: Cmd %d", cmd);
 
     switch (cmd) {
-        case PAYLOAD:
-        if(channel_val[PAYLOAD] < CHANNEL_HIGH){
-            channel_val[PAYLOAD] += PAYLOAD_STEP;
+        case PAYLOAD_BLUE_CMD:
+        if(channel_val[PAYLOAD_BLUE_CH] < CHANNEL_HIGH){
+            channel_val[PAYLOAD_BLUE_CH] += PAYLOAD_STEP;
         } else {
-            channel_val[PAYLOAD] = CHANNEL_LOW;
+            channel_val[PAYLOAD_BLUE_CH] = CHANNEL_LOW;
         }
-        ESP_LOGI(TAG, "Action: Drop Payload, ch %d %d",PAYLOAD,  channel_val[PAYLOAD]);
-            break;
-
-        case CAM:
-        if(channel_val[CAM] < CHANNEL_HIGH){
-            channel_val[CAM] += CAM_STEP;
-        } else {
-            channel_val[CAM] = CHANNEL_LOW;
-        }
-        ESP_LOGI(TAG, "Action: Cam switch, ch %d %d",CAM,  channel_val[CAM]);
+        ESP_LOGI(TAG, "BLUE PAYLOAD, ch %d %d",PAYLOAD_BLUE_CH,  channel_val[PAYLOAD_BLUE_CH]);
             break;
 
 
-        case DRONE:
-        if(channel_val[DRONE] < CHANNEL_HIGH){
-            channel_val[DRONE] += DRONE_STEP;
+        case PAYLOAD_RED_CMD:
+            if(channel_val[PAYLOAD_RED_CH] < CHANNEL_HIGH){
+                channel_val[PAYLOAD_RED_CH] += PAYLOAD_STEP;
+            } else {
+                channel_val[PAYLOAD_RED_CH] = CHANNEL_LOW;
+            }
+            ESP_LOGI(TAG, "RED PAYLOAD, ch %d %d",PAYLOAD_RED_CH,  channel_val[PAYLOAD_RED_CH]);
+                break;
+
+
+        case CAMERA_CMD:
+        if(channel_val[CAM_CH] < CHANNEL_HIGH){
+            channel_val[CAM_CH] += CAM_STEP;
         } else {
-            channel_val[DRONE] = CHANNEL_LOW;
+            channel_val[CAM_CH] = CHANNEL_LOW;
         }
-        ESP_LOGI(TAG, "Action: Toggle Switch, ch %d %d",DRONE,  channel_val[DRONE]);
+        ESP_LOGI(TAG, "Action: Cam switch, ch %d %d",CAM_CH,  channel_val[CAM_CH]);
             break;
+
+
+
+        case SWITCH_DRONE_CMD:
+        if(channel_val[DRONE_CH] < CHANNEL_HIGH){
+            channel_val[DRONE_CH] += DRONE_STEP;
+        } else {
+            channel_val[DRONE_CH] = CHANNEL_LOW;
+        }
+        ESP_LOGI(TAG, "Action: Toggle Switch, ch %d %d",DRONE_CH,  channel_val[DRONE_CH]);
+            break;
+        
+
+        // case ERROR_CMD:
+        // channel_val[ERR_CH] = CHANNEL_LOW;
+        // ESP_LOGI(TAG, "ERROR, ch %d %d",ERR_CH,  channel_val[ERR_CH]);
+        //     break;
+        
             
         default:
+            // channel_val[ERR_CH] = CHANNEL_LOW;
             ESP_LOGW(TAG, "Unknown Command ID");
             break;
     }
@@ -175,7 +206,7 @@ void uart_task(void *arg) {
     uint8_t packet[3];
     
     while (1) {
-        int len = uart_read_bytes(uart_num, packet, 3, 100 / portTICK_PERIOD_MS);
+        int len = uart_read_bytes(uart_num, packet, 3, 50 / portTICK_PERIOD_MS);
 
         if (len == 3) {
             if (packet[0] == 0xAA) {
