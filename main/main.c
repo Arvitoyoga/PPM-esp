@@ -3,6 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "portmacro.h"
 #include "driver/gptimer.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
@@ -12,17 +13,17 @@
 
 
 
-#define DEBUG 1
+#define DEBUG 0 //JANGAN DI ENABLE
 
 #define RESOLUTION 1 * 1000 * 1000
 #define RMT_PIN 5
 #define TAG "RMT"
 #define FRAME_DURATION_US 25000
-#define CHANNEL_NUM 8
-#define PPM_PULSE_WIDTH 100
+#define CHANNEL_NUM 10 // SEBELUMNYA 8
+#define PPM_PULSE_WIDTH 200 //TAMBAHI JIKA TIDAK DETEK ATAU TIDAK STABIL (100-300)
 
 #define BUF_SIZE (1024)
-#define UART_RX_PIN 17 
+#define UART_RX_PIN 16 
 #define UART_BAUDRATE 9600
 
 #define RANGE_CHANNEL 2000 - 1000
@@ -30,23 +31,31 @@
 #define CHANNEL_HIGH 2000
 #define CAM_STEP 1000
 #define DRONE_STEP 500
-#define PAYLOAD_STEP 100
 
 
+enum data_map{ //map data ke command
+    ERROR_CMD = 1,
+    PAYLOAD_LEFT_CMD =  2,
+    PAYLOAD_RIGHT_CMD = 3,
+    SWITCH_CAMERA_CMD = 4,
+    SWITCH_DRONE_CMD = 5,
+    PAYLOAD_RESET = 6,
+};
 
-
-enum channel{
-    ROLL = 0,
+enum channel_map{ //map channel ke command
+    ROLL = 1,
     PITCH,
     YAW,
     THROTTLE,
     ARM,
-    CAM, 
-    DRONE, 
-    PAYLOAD
+    CAM_CH,
+    DRONE_CH,
+    PAYLOAD_CH,
 };
 
-uint16_t channel_val[CHANNEL_NUM] = {0};
+
+
+uint16_t channel_val[CHANNEL_NUM] = {1000};
 
 rmt_channel_handle_t rmt_channel = NULL;
 rmt_encoder_handle_t encoder = NULL;
@@ -105,32 +114,47 @@ void execute_command(uint8_t cmd) {
     ESP_LOGI(TAG, "Executing: Cmd %d", cmd);
 
     switch (cmd) {
-        case PAYLOAD:
-        if(channel_val[PAYLOAD] < CHANNEL_HIGH){
-            channel_val[PAYLOAD] += PAYLOAD_STEP;
+case PAYLOAD_RIGHT_CMD:
+
+    channel_val[PAYLOAD_CH] = 2000;
+    ESP_LOGI(TAG, "PAYLOAD RIGHT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    channel_val[PAYLOAD_CH] = 1500;
+    ESP_LOGI(TAG, "PAYLOAD CENTER, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
+    break;
+
+
+case PAYLOAD_LEFT_CMD:
+    channel_val[PAYLOAD_CH] = 1000;
+    ESP_LOGI(TAG, "PAYLOAD LEFT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    channel_val[PAYLOAD_CH] = 1500;
+    ESP_LOGI(TAG, "PAYLOAD CENTER, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
+    break;
+
+
+        case SWITCH_CAMERA_CMD:
+        if(channel_val[CAM_CH] < CHANNEL_HIGH){
+            channel_val[CAM_CH] += CAM_STEP;
         } else {
-            channel_val[PAYLOAD] = CHANNEL_LOW;
+            channel_val[CAM_CH] = CHANNEL_LOW;
         }
-        ESP_LOGI(TAG, "Action: Drop Payload, ch %d %d",PAYLOAD,  channel_val[PAYLOAD]);
+        ESP_LOGI(TAG, "Action: Cam switch, ch %d %d",CAM_CH,  channel_val[CAM_CH]);
             break;
 
-        case CAM:
-        if(channel_val[CAM] < CHANNEL_HIGH){
-            channel_val[CAM] += CAM_STEP;
-        } else {
-            channel_val[CAM] = CHANNEL_LOW;
-        }
-        ESP_LOGI(TAG, "Action: Cam switch, ch %d %d",CAM,  channel_val[CAM]);
-            break;
 
 
-        case DRONE:
-        if(channel_val[DRONE] < CHANNEL_HIGH){
-            channel_val[DRONE] += DRONE_STEP;
+        case SWITCH_DRONE_CMD:
+        if(channel_val[DRONE_CH] < CHANNEL_HIGH){
+            channel_val[DRONE_CH] += DRONE_STEP;
         } else {
-            channel_val[DRONE] = CHANNEL_LOW;
+            channel_val[DRONE_CH] = CHANNEL_LOW;
         }
-        ESP_LOGI(TAG, "Action: Toggle Switch, ch %d %d",DRONE,  channel_val[DRONE]);
+        ESP_LOGI(TAG, "Action: Toggle Switch, ch %d %d",DRONE_CH,  channel_val[DRONE_CH]);
             break;
             
         default:
@@ -175,7 +199,7 @@ void uart_task(void *arg) {
     uint8_t packet[3];
     
     while (1) {
-        int len = uart_read_bytes(uart_num, packet, 3, 100 / portTICK_PERIOD_MS);
+        int len = uart_read_bytes(uart_num, packet, 3, 50 / portTICK_PERIOD_MS);
 
         if (len == 3) {
             if (packet[0] == 0xAA) {
