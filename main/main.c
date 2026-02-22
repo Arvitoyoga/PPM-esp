@@ -11,20 +11,18 @@
 #include "driver/uart.h"
 #include "esp_mac.h"
 
-
-
-#define DEBUG 0 //JANGAN DI ENABLE
+#define DEBUG 0 
 
 #define RESOLUTION 1 * 1000 * 1000
 #define RMT_PIN 5
 #define TAG "RMT"
-#define FRAME_DURATION_US 25000
-#define CHANNEL_NUM 10 // SEBELUMNYA 8
-#define PPM_PULSE_WIDTH 200 //TAMBAHI JIKA TIDAK DETEK ATAU TIDAK STABIL (100-300)
+#define FRAME_DURATION_US 20000 
+#define CHANNEL_NUM 8
+#define PPM_PULSE_WIDTH 100 
 
 #define BUF_SIZE (1024)
 #define UART_RX_PIN 16 
-#define UART_BAUDRATE 9600
+#define UART_BAUDRATE 115200
 
 #define RANGE_CHANNEL 2000 - 1000
 #define CHANNEL_LOW 1000
@@ -39,15 +37,19 @@ enum data_map{ //map data ke command
     PAYLOAD_RIGHT_CMD = 3,
     SWITCH_CAMERA_CMD = 4,
     SWITCH_DRONE_CMD = 5,
-    PAYLOAD_RESET = 6,
+    PAYLOAD_RESET_CMD = 6,
+    PAYLOAD_LOADER_CMD = 7,
+    RESET_DROPPER = 8,
+    DRONE_ROTATE = 9,
+
 };
 
 enum channel_map{ //map channel ke command
-    ROLL = 1,
+    ROLL = 0,
     PITCH,
-    YAW,
-    THROTTLE,
-    ARM,
+    RESET_DROPPER_CH,
+    PAYLOAD_LOADER_CH,
+    PAYLOAD_RESET_CH,
     CAM_CH,
     DRONE_CH,
     PAYLOAD_CH,
@@ -55,7 +57,7 @@ enum channel_map{ //map channel ke command
 
 
 
-uint16_t channel_val[CHANNEL_NUM] = {1000};
+uint16_t channel_val[CHANNEL_NUM] = {0};
 
 rmt_channel_handle_t rmt_channel = NULL;
 rmt_encoder_handle_t encoder = NULL;
@@ -71,8 +73,6 @@ gpio_config_t io_conf = {
     .pull_down_en = 0,
     .pull_down_en = 0
 };
-
-
 
 
 static size_t ppm_encoder_callback(const void *data, size_t data_size,
@@ -113,16 +113,16 @@ const uart_port_t uart_num = UART_NUM_2;
 void execute_command(uint8_t cmd) {
     ESP_LOGI(TAG, "Executing: Cmd %d", cmd);
 
-    switch (cmd) {
+switch (cmd) {
 case PAYLOAD_RIGHT_CMD:
 
     channel_val[PAYLOAD_CH] = 2000;
     ESP_LOGI(TAG, "PAYLOAD RIGHT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
 
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(500));
 
     channel_val[PAYLOAD_CH] = 1500;
-    ESP_LOGI(TAG, "PAYLOAD CENTER, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
+    ESP_LOGI(TAG, "PAYLOAD RIGHT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
     break;
 
 
@@ -130,14 +130,13 @@ case PAYLOAD_LEFT_CMD:
     channel_val[PAYLOAD_CH] = 1000;
     ESP_LOGI(TAG, "PAYLOAD LEFT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
 
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(500));
 
     channel_val[PAYLOAD_CH] = 1500;
-    ESP_LOGI(TAG, "PAYLOAD CENTER, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
+    ESP_LOGI(TAG, "PAYLOAD LEFT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
     break;
 
-
-        case SWITCH_CAMERA_CMD:
+case SWITCH_CAMERA_CMD:
         if(channel_val[CAM_CH] < CHANNEL_HIGH){
             channel_val[CAM_CH] += CAM_STEP;
         } else {
@@ -148,16 +147,56 @@ case PAYLOAD_LEFT_CMD:
 
 
 
-        case SWITCH_DRONE_CMD:
+case SWITCH_DRONE_CMD:
         if(channel_val[DRONE_CH] < CHANNEL_HIGH){
             channel_val[DRONE_CH] += DRONE_STEP;
         } else {
             channel_val[DRONE_CH] = CHANNEL_LOW;
         }
-        ESP_LOGI(TAG, "Action: Toggle Switch, ch %d %d",DRONE_CH,  channel_val[DRONE_CH]);
+        ESP_LOGI(TAG, "Action: Drone Switch, ch %d %d",DRONE_CH,  channel_val[DRONE_CH]);
             break;
+
+case PAYLOAD_LOADER_CMD:
+    channel_val[PAYLOAD_LOADER_CH] = 2000;
+    ESP_LOGI(TAG, "PAYLOAD LOAD, ch %d %d", PAYLOAD_LOADER_CH, channel_val[PAYLOAD_LOADER_CH]);
+
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    channel_val[PAYLOAD_LOADER_CH] = 1000;
+    ESP_LOGI(TAG, "PAYLOAD LOAD, ch %d %d", PAYLOAD_LOADER_CH, channel_val[PAYLOAD_LOADER_CH]);
+    break;
+
+case PAYLOAD_RESET_CMD:
+    channel_val[PAYLOAD_RESET_CH] = 1000;
+    ESP_LOGI(TAG, "PAYLOAD RESET, ch %d %d", PAYLOAD_RESET_CH, channel_val[PAYLOAD_RESET_CH]);
+
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    channel_val[PAYLOAD_RESET_CH] = 1500;
+    ESP_LOGI(TAG, "PAYLOAD RESET, ch %d %d", PAYLOAD_RESET_CH, channel_val[PAYLOAD_RESET_CH]);
+    break;
+
+case DRONE_ROTATE:
+    channel_val[PAYLOAD_RESET_CH] = 2000;
+    ESP_LOGI(TAG, "DRONE ROTATE, ch %d %d", PAYLOAD_RESET_CH, channel_val[PAYLOAD_RESET_CH]);
+
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    channel_val[PAYLOAD_RESET_CH] = 1500;
+    ESP_LOGI(TAG, "DRONE ROTATE, ch %d %d", PAYLOAD_RESET_CH, channel_val[PAYLOAD_RESET_CH]);
+    break;
+
+case RESET_DROPPER:
+    channel_val[RESET_DROPPER_CH] = 1000;
+    ESP_LOGI(TAG, "DROPPER RESET, ch %d %d", RESET_DROPPER_CH, channel_val[RESET_DROPPER_CH]);
+
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    channel_val[RESET_DROPPER_CH] = 1500;
+    ESP_LOGI(TAG, "DROPPER RESET, ch %d %d", RESET_DROPPER_CH, channel_val[RESET_DROPPER_CH]);
+    break;
             
-        default:
+default:
             ESP_LOGW(TAG, "Unknown Command ID");
             break;
     }
@@ -169,13 +208,17 @@ void rmt_task(){
     int counter = 0;
     while(1){
         if(DEBUG){
-        for(int i = 0; i < CHANNEL_NUM; i ++){
-                channel_val[i] = counter;
-            }
+            channel_val[PAYLOAD_CH] = 2000;
+    ESP_LOGI(TAG, "PAYLOAD RIGHT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    channel_val[PAYLOAD_CH] = 1500;
+    vTaskDelay(pdMS_TO_TICKS(1000));
         counter +=10;
         if(counter > 1900) counter = 1000;
         }
-        // ESP_LOGI("ch", "%d %d", channel_val[0], channel_val[1]);
+
         ESP_ERROR_CHECK(rmt_transmit(rmt_channel, encoder, channel_val, sizeof(channel_val), &rmt_tx));
         ESP_ERROR_CHECK(rmt_tx_wait_all_done(rmt_channel, portMAX_DELAY));
         // vTaskDelay(pdMS_TO_TICKS(10));
@@ -223,7 +266,7 @@ void uart_task(void *arg) {
 void app_main(void)
 {
     for(int i = 0; i < CHANNEL_NUM; i ++){
-        channel_val[i] = 1800;
+        channel_val[i] = 1000;
     }
 
 ESP_ERROR_CHECK(uart_driver_install(uart_num, BUF_SIZE * 2, 0, 0, NULL, 0));
@@ -250,9 +293,11 @@ ESP_LOGI(TAG, "Create RMT TX channel");
     ESP_ERROR_CHECK(rmt_enable(rmt_channel));
 
 
-
+    channel_val[PAYLOAD_RESET_CH] = 1500;
+    channel_val[PAYLOAD_CH] = 1500;
+    channel_val[RESET_DROPPER_CH] = 1500;
     xTaskCreatePinnedToCore(rmt_task, "rmt", 2048, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(uart_task, "uart", 2048, NULL, 4, NULL, 0);
- 
+
 
 }
