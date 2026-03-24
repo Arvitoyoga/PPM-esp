@@ -23,8 +23,41 @@
 #define DEBUG 0
 
 #define DEVICE_NAME "CAKSA_BT"
-static uint32_t spp_handle = 0;
-static bool     connected  = false;
+
+#define MAX_SPP_CLIENTS 3
+static uint32_t spp_handles[MAX_SPP_CLIENTS] = {0, 0};
+static int      spp_client_count = 0;
+
+// Tambah handle ke array
+static void spp_add_handle(uint32_t handle) {
+    for (int i = 0; i < MAX_SPP_CLIENTS; i++) {
+        if (spp_handles[i] == 0) {
+            spp_handles[i] = handle;
+            spp_client_count++;
+            printf("[BT] Client #%d connected, handle=%lu\n", spp_client_count, (unsigned long)handle);
+            return;
+        }
+    }
+    printf("[BT] Max clients reached, rejecting handle=%lu\n", (unsigned long)handle);
+}
+
+// Hapus handle dari array saat disconnect
+static void spp_remove_handle(uint32_t handle) {
+    for (int i = 0; i < MAX_SPP_CLIENTS; i++) {
+        if (spp_handles[i] == handle) {
+            spp_handles[i] = 0;
+            spp_client_count--;
+            printf("[BT] Client disconnected, handle=%lu, remaining=%d\n",
+                   (unsigned long)handle, spp_client_count);
+            return;
+        }
+    }
+}
+
+// Cek apakah ada minimal 1 klien terhubung
+static bool any_connected(void) {
+    return spp_client_count > 0;
+}
 
 #define RESOLUTION 1 * 1000 * 1000
 #define RMT_PIN 5
@@ -175,26 +208,34 @@ static size_t ppm_encoder_callback(const void *data, size_t data_size,
 
 const uart_port_t uart_num = UART_NUM_2;
 
+// =====================================================
+// ✅ TELEM BROADCAST ke SEMUA klien yang terhubung
+// =====================================================
 static void telem_task(void *arg)
 {
-        if (connected) {
+    if (!any_connected()) return;
 
-            drone   =   (channel_val[DRONE_CH] == 1000) ? 1 :
-                        (channel_val[DRONE_CH] == 1500) ? 2 : 3;
+    drone   =   (channel_val[DRONE_CH] == 1000) ? 1 :
+                (channel_val[DRONE_CH] == 1500) ? 2 : 3;
 
-            mode    =   !ManualMode;
-            payload =   PaySeq;
-            pos     =   DronePos;
-            dropA   =   DropperPosA;
-            dropB   =   DropperPosB;
-            cam     =   (channel_val[CAM_CH] == 1000) ? 1 : 2;
+    mode    =   !ManualMode;
+    payload =   PaySeq;
+    pos     =   DronePos;
+    dropA   =   DropperPosA;
+    dropB   =   DropperPosB;
+    cam     =   (channel_val[CAM_CH] == 1000) ? 1 : 2;
 
-            char buf[32];
-            int len = snprintf(buf, sizeof(buf),
-                               "%d,%d,%d,%d,%d,%d,%d\n",
-                               drone, cam, mode, payload, pos, dropA, dropB);
-            esp_spp_write(spp_handle, len, (uint8_t *)buf);
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf),
+                       "%d,%d,%d,%d,%d,%d,%d\n",
+                       drone, cam, mode, payload, pos, dropA, dropB);
+
+    // ✅ Kirim ke SEMUA handle aktif (broadcast)
+    for (int i = 0; i < MAX_SPP_CLIENTS; i++) {
+        if (spp_handles[i] != 0) {
+            esp_spp_write(spp_handles[i], len, (uint8_t *)buf);
         }
+    }
 }
 
 void execute_command(uint8_t cmd)
@@ -512,7 +553,6 @@ void manual_command()
             manualCMD = 8;
             execute_command(manualCMD);
         }
-        // else if (countR == 4) {ESP_LOGI(TAG, "5"); manualCMD = 5; execute_command(manualCMD);}
         countR = 0;
     }
 
@@ -656,9 +696,6 @@ void uart_task(void *arg)
             enVoiceA = 1;
             enVoiceB = 1;
         }
-        // ESP_LOGI(TAG, "TES:%d",ManualMode );
-        // ESP_LOGI(TAG,"enA:%d || enB:%d", enVoiceA, enVoiceB);
-        // ESP_LOGI(TAG, "R:%d raw:%d | L:%d raw:%d",touchR,RawtouchR,touchL,RawtouchL);
     }
 }
 
@@ -825,18 +862,20 @@ static void spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
             break;
 
         case ESP_SPP_SRV_OPEN_EVT:
-            spp_handle = param->srv_open.handle;
-            connected  = true;
-            printf("[BT] Connected\n");
+            // ✅ Tambah ke daftar multi-handle
+            spp_add_handle(param->srv_open.handle);
+            // Kirim state awal ke klien baru
+            telem_task(NULL);
             break;
 
         case ESP_SPP_CLOSE_EVT:
-            connected  = false;
-            spp_handle = 0;
+            // ✅ Hapus dari daftar multi-handle
+            spp_remove_handle(param->close.handle);
             printf("[BT] Disconnected\n");
             break;
 
         case ESP_SPP_DATA_IND_EVT: {
+            // ✅ Terima command dari device MANAPUN
             char buf[8] = {0};
             int len = param->data_ind.len < 7 ? param->data_ind.len : 7;
             memcpy(buf, param->data_ind.data, len);
