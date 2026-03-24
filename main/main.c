@@ -10,54 +10,10 @@
 #include "driver/gpio.h"
 #include "driver/rmt_tx.h"
 #include "driver/uart.h"
-#include "esp_mac.h"
-#include "driver/touch_pad.h"
 #include "oled.h"
 #include "nvs_flash.h"
-#include "esp_bt.h"
-#include "esp_bt_main.h"
-#include "esp_bt_device.h"
-#include "esp_gap_bt_api.h"
-#include "esp_spp_api.h"
 
 #define DEBUG 0
-
-#define DEVICE_NAME "CAKSA_BT"
-
-#define MAX_SPP_CLIENTS 3
-static uint32_t spp_handles[MAX_SPP_CLIENTS] = {0, 0};
-static int      spp_client_count = 0;
-
-// Tambah handle ke array
-static void spp_add_handle(uint32_t handle) {
-    for (int i = 0; i < MAX_SPP_CLIENTS; i++) {
-        if (spp_handles[i] == 0) {
-            spp_handles[i] = handle;
-            spp_client_count++;
-            printf("[BT] Client #%d connected, handle=%lu\n", spp_client_count, (unsigned long)handle);
-            return;
-        }
-    }
-    printf("[BT] Max clients reached, rejecting handle=%lu\n", (unsigned long)handle);
-}
-
-// Hapus handle dari array saat disconnect
-static void spp_remove_handle(uint32_t handle) {
-    for (int i = 0; i < MAX_SPP_CLIENTS; i++) {
-        if (spp_handles[i] == handle) {
-            spp_handles[i] = 0;
-            spp_client_count--;
-            printf("[BT] Client disconnected, handle=%lu, remaining=%d\n",
-                   (unsigned long)handle, spp_client_count);
-            return;
-        }
-    }
-}
-
-// Cek apakah ada minimal 1 klien terhubung
-static bool any_connected(void) {
-    return spp_client_count > 0;
-}
 
 #define RESOLUTION 1 * 1000 * 1000
 #define RMT_PIN 5
@@ -126,7 +82,7 @@ int16_t touchR, touchL, RawtouchR, RawtouchL;
 extern const uint8_t epd_bitmap_logo[];
 
 enum data_map
-{ // map data ke command
+{
     ERROR_CMD = 1,
     PAYLOAD_LEFT_CMD = 2,
     PAYLOAD_RIGHT_CMD = 3,
@@ -136,11 +92,10 @@ enum data_map
     PAYLOAD_LOADER_CMD = 7,
     RESET_DROPPER = 8,
     DRONE_ROTATE = 9,
-
 };
 
 enum channel_map
-{ // map channel ke command
+{
     ROLL = 0,
     PITCH,
     RESET_DROPPER_CH,
@@ -208,39 +163,8 @@ static size_t ppm_encoder_callback(const void *data, size_t data_size,
 
 const uart_port_t uart_num = UART_NUM_2;
 
-// =====================================================
-// ✅ TELEM BROADCAST ke SEMUA klien yang terhubung
-// =====================================================
-static void telem_task(void *arg)
-{
-    if (!any_connected()) return;
-
-    drone   =   (channel_val[DRONE_CH] == 1000) ? 1 :
-                (channel_val[DRONE_CH] == 1500) ? 2 : 3;
-
-    mode    =   !ManualMode;
-    payload =   PaySeq;
-    pos     =   DronePos;
-    dropA   =   DropperPosA;
-    dropB   =   DropperPosB;
-    cam     =   (channel_val[CAM_CH] == 1000) ? 1 : 2;
-
-    char buf[32];
-    int len = snprintf(buf, sizeof(buf),
-                       "%d,%d,%d,%d,%d,%d,%d\n",
-                       drone, cam, mode, payload, pos, dropA, dropB);
-
-    // ✅ Kirim ke SEMUA handle aktif (broadcast)
-    for (int i = 0; i < MAX_SPP_CLIENTS; i++) {
-        if (spp_handles[i] != 0) {
-            esp_spp_write(spp_handles[i], len, (uint8_t *)buf);
-        }
-    }
-}
-
 void execute_command(uint8_t cmd)
 {
-
     ESP_LOGI(TAG, "Try to Executing: Cmd %d", cmd);
 
     if (cmd == PAYLOAD_RIGHT_CMD && enVoiceA)
@@ -374,18 +298,18 @@ void execute_command(uint8_t cmd)
     }
     else
     {
-
         ESP_LOGW(TAG, "Unknown Command ID or Button Has Not Been touched");
     }
 
     if (DropperPosA == 2 && !dropperTriggeredA)
     {
-
         channel_val[ROTATE_CH] = 1000;
 
-        if(DronePos<2) DronePos=2;
-        if(DronePos>2) DronePos=0;
-        
+        if(PaySeq>1) {
+            if(DronePos<2) DronePos=2;
+            if(DronePos>2) DronePos=0;
+        }
+
         dropperTriggeredA = true;
     }
 
@@ -396,11 +320,12 @@ void execute_command(uint8_t cmd)
 
     if (DropperPosB == 2 && !dropperTriggeredB)
     {
-
         channel_val[ROTATE_CH] = 1000;
 
-        if(DronePos<2) DronePos=2;
-        if(DronePos>2) DronePos=0;
+        if(PaySeq>1) {
+            if(DronePos<2) DronePos=2;
+            if(DronePos>2) DronePos=0;
+        }
 
         dropperTriggeredB = true;
     }
@@ -409,30 +334,19 @@ void execute_command(uint8_t cmd)
     {
         dropperTriggeredB = false;
     }
-
-    telem_task(NULL);
 }
 
 void manual_command()
 {
     uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
 
-    // =================================================
-    // ================= DETEKSI SENTUH =================
-    // =================================================
-
     if (prevR && !touchR)
         readyR = true;
     if (prevL && !touchL)
         readyL = true;
 
-    // =================================================
-    // ================= DETEKSI LEPAS ==================
-    // =================================================
-
     if (!prevR && touchR && readyR)
     {
-
         syncWaiting = true;
         syncStartTime = now;
 
@@ -443,7 +357,6 @@ void manual_command()
 
     if (!prevL && touchL && readyL)
     {
-
         syncWaiting = true;
         syncStartTime = now;
 
@@ -452,17 +365,11 @@ void manual_command()
         readyL = false;
     }
 
-    // =================================================
-    // ============ DETEKSI LEPAS BERSAMAAN =============
-    // =================================================
-
     if (syncWaiting)
     {
-
         if (touchR && touchL &&
             (now - syncStartTime) <= SYNC_WINDOW)
         {
-
             syncCount++;
             lastSyncTime = now;
 
@@ -476,22 +383,17 @@ void manual_command()
             syncWaiting = false;
         }
     }
-    // =================================================
-    // ============ SYNC DOUBLE CLICK ==================
-    // =================================================
 
     if (syncCount > 0 &&
         (now - lastSyncTime) > MULTI_CLICK_TIME &&
         touchR == false &&
         touchL == false)
     {
-
         if (syncCount == 1)
         {
             ESP_LOGI(TAG, "4");
             manualCMD = 4;
         }
-
         else if (syncCount == 2)
         {
             ESP_LOGI(TAG, "5");
@@ -502,15 +404,10 @@ void manual_command()
         syncCount = 0;
     }
 
-    // =================================================
-    // ===== BATAL JIKA LEPAS TERLALU LAMA ==============
-    // =================================================
-
     if (countR > 0 &&
         (now - lastReleaseR) > TAP_CONFIRM_TIMEOUT &&
         touchR == true)
     {
-
         countR = 0;
         ESP_LOGI(TAG, "Right tap timeout");
     }
@@ -519,14 +416,9 @@ void manual_command()
         (now - lastReleaseL) > TAP_CONFIRM_TIMEOUT &&
         touchL == true)
     {
-
         countL = 0;
         ESP_LOGI(TAG, "Left tap timeout");
     }
-
-    // =================================================
-    // ================= RIGHT COMMAND ==================
-    // =================================================
 
     if (!syncWaiting &&
         !cmd5Pending &&
@@ -534,7 +426,6 @@ void manual_command()
         (now - lastReleaseR) > MULTI_CLICK_TIME &&
         touchR == false)
     {
-
         if (countR == 1)
         {
             ESP_LOGI(TAG, "3");
@@ -556,17 +447,12 @@ void manual_command()
         countR = 0;
     }
 
-    // =================================================
-    // ================= LEFT COMMAND ===================
-    // =================================================
-
     if (!syncWaiting &&
         !cmd5Pending &&
         countL > 0 &&
         (now - lastReleaseL) > MULTI_CLICK_TIME &&
         touchL == false)
     {
-
         if (countL == 1)
         {
             ESP_LOGI(TAG, "2");
@@ -649,14 +535,21 @@ void uart_task(void *arg)
                 if (checksum == (cmd & 0xFF) && ManualMode == 0)
                 {
                     ESP_LOGI(TAG, "Received command: Cmd %d", cmd);
-                    execute_command(cmd);
+                    if(cmd == 5 &&(gpio_get_level(12) || gpio_get_level(14))) {
+                        execute_command(cmd);
+                    }
+                    if (cmd != 5)
+                    {
+                        execute_command(cmd);
+                    }
+                    
+                    
                     gpio_set_level(GPIO_NUM_2, 1);
                 }
             }
         }
         else if (len > 0)
         {
-
             uart_flush_input(uart_num);
         }
 
@@ -664,16 +557,13 @@ void uart_task(void *arg)
 
         if (ManualMode != lastManualMode)
         {
-
             if (ManualMode)
             {
                 ESP_LOGI(TAG, "MANUAL ON");
-                telem_task(NULL);
             }
             else
             {
                 ESP_LOGI(TAG, "VOICE ON");
-                telem_task(NULL);
             }
 
             lastManualMode = ManualMode;
@@ -681,7 +571,6 @@ void uart_task(void *arg)
 
         if (ManualMode)
         {
-
             touchR = gpio_get_level(12);
             touchL = gpio_get_level(14);
 
@@ -690,7 +579,6 @@ void uart_task(void *arg)
 
             manual_command();
         }
-
         else
         {
             enVoiceA = 1;
@@ -703,7 +591,6 @@ void oled_task()
 {
     while (1)
     {
-
         if (channel_val[DRONE_CH] == 1000)
         {
             oled_set_cursor(1, 0);
@@ -725,7 +612,6 @@ void oled_task()
             oled_set_cursor(99, 0);
             oled_print("CAM 1");
         }
-
         else
         {
             oled_set_cursor(99, 0);
@@ -786,7 +672,6 @@ void oled_task()
 
 void buzzer_task()
 {
-
     while (1)
     {
         if (buzz == 1)
@@ -801,7 +686,6 @@ void buzzer_task()
             vTaskDelay(pdMS_TO_TICKS(20));
             buzz = 0;
         }
-
         else if (buzz == 2)
         {
             gpio_set_level(GPIO_NUM_26, 1);
@@ -818,7 +702,6 @@ void buzzer_task()
             vTaskDelay(pdMS_TO_TICKS(20));
             buzz = 0;
         }
-
         else if (buzz == 3)
         {
             gpio_set_level(GPIO_NUM_26, 1);
@@ -831,7 +714,6 @@ void buzzer_task()
             vTaskDelay(pdMS_TO_TICKS(20));
             buzz = 0;
         }
-
         else if (buzz == 4)
         {
             gpio_set_level(GPIO_NUM_26, 1);
@@ -841,80 +723,6 @@ void buzzer_task()
         }
         vTaskDelay(pdMS_TO_TICKS(100));
     }
-}
-
-static void gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
-{
-    if (event == ESP_BT_GAP_CFM_REQ_EVT)
-        esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
-}
-
-static void spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
-{
-    switch (event) {
-        case ESP_SPP_INIT_EVT:
-            esp_spp_start_srv(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_SLAVE, 0, "SPP");
-            break;
-
-        case ESP_SPP_START_EVT:
-            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-            printf("[BT] Ready, waiting connection...\n");
-            break;
-
-        case ESP_SPP_SRV_OPEN_EVT:
-            // ✅ Tambah ke daftar multi-handle
-            spp_add_handle(param->srv_open.handle);
-            // Kirim state awal ke klien baru
-            telem_task(NULL);
-            break;
-
-        case ESP_SPP_CLOSE_EVT:
-            // ✅ Hapus dari daftar multi-handle
-            spp_remove_handle(param->close.handle);
-            printf("[BT] Disconnected\n");
-            break;
-
-        case ESP_SPP_DATA_IND_EVT: {
-            // ✅ Terima command dari device MANAPUN
-            char buf[8] = {0};
-            int len = param->data_ind.len < 7 ? param->data_ind.len : 7;
-            memcpy(buf, param->data_ind.data, len);
-            int cmd = atoi(buf);
-            execute_command(cmd);
-            break;
-        }
-
-        default: break;
-    }
-}
-
-static void bt_task(void *arg)
-{
-    esp_bt_controller_config_t cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    
-    ESP_ERROR_CHECK(esp_bt_controller_init(&cfg));
-    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BTDM));
-    ESP_ERROR_CHECK(esp_bluedroid_init());
-    ESP_ERROR_CHECK(esp_bluedroid_enable());
-
-    vTaskDelay(pdMS_TO_TICKS(200));
-
-    esp_bt_dev_set_device_name(DEVICE_NAME);
-
-    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
-    esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &iocap, sizeof(iocap));
-
-    esp_bt_gap_register_callback(gap_cb);
-    esp_spp_register_callback(spp_cb);
-
-    esp_spp_cfg_t spp_cfg = {
-        .mode = ESP_SPP_MODE_CB,
-        .enable_l2cap_ertm = false,
-        .tx_buffer_size = 0,
-    };
-    ESP_ERROR_CHECK(esp_spp_enhanced_init(&spp_cfg));
-
-    vTaskDelete(NULL);
 }
 
 void app_main(void)
@@ -929,17 +737,6 @@ void app_main(void)
     oled_clear();
 
     gpio_set_direction(GPIO_NUM_26, GPIO_MODE_OUTPUT);
-    oled_set_cursor(38, 2);
-    oled_print("STARTING");
-    for (int i = 0; i < 4; i++)
-    {
-        oled_print(".");
-        gpio_set_level(GPIO_NUM_26, 1);
-        vTaskDelay(pdMS_TO_TICKS(300));
-        gpio_set_level(GPIO_NUM_26, 0);
-        vTaskDelay(pdMS_TO_TICKS(300));
-    }
-
     for (int i = 0; i < CHANNEL_NUM; i++)
     {
         channel_val[i] = 1000;
@@ -969,14 +766,8 @@ void app_main(void)
 
     channel_val[RESET_DROPPER_CH] = 1500;
 
-    oled_clear();
-    oled_draw_bitmap(epd_bitmap_logo, 128, 64);
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    oled_clear();
-
     xTaskCreatePinnedToCore(uart_task, "uart", 4096, NULL, 4, NULL, 0);
     xTaskCreatePinnedToCore(rmt_task, "rmt", 4096, NULL, 7, NULL, 1);
     xTaskCreatePinnedToCore(oled_task, "oled", 4096, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(buzzer_task, "buzzer", 4096, NULL, 4, NULL, 1);
-    xTaskCreatePinnedToCore(bt_task, "bt", 8192, NULL, 6, NULL, 1);
 }
