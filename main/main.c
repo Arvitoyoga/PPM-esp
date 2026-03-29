@@ -765,6 +765,7 @@ void app_main(void)
     ESP_ERROR_CHECK(rmt_enable(rmt_channel));
 
     channel_val[RESET_DROPPER_CH] = 1500;
+    channel_val[PAYLOAD_CH] = 1500;
 
     xTaskCreatePinnedToCore(uart_task, "uart", 4096, NULL, 4, NULL, 0);
     xTaskCreatePinnedToCore(rmt_task, "rmt", 4096, NULL, 7, NULL, 1);
